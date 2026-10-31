@@ -48,11 +48,11 @@ Do **not** set `SHADOW_DATABASE_URL`, `TEST_DATABASE_URL` or `SEED_DEMO_PASSWORD
 
 ## 3. Deploy the API
 
-**Hostinger Node.js web app (GitHub auto-deploy):** set the build command to
-`npm run build:hostinger` (applies pending migrations, then compiles) and the entry file to
-`dist/server.js`. Environment variables from the panel must be available at build time for the
-migration step; if they are not, run `npm run db:deploy` once from a machine allowed in
-**Databases → Remote MySQL**.
+**Hostinger Node.js web app (GitHub auto-deploy):** no build-command changes are needed. With
+`NODE_ENV=production` set in the panel, `npm run build` first runs `scripts/migrate-on-deploy.mjs`
+(npm `prebuild` hook), which applies pending migrations with `prisma migrate deploy`. Build-time
+tools (TypeScript, Prisma CLI, `@types/*` used by the compiler) are regular dependencies because
+production installs skip devDependencies. Set `SKIP_DB_MIGRATE=1` to build without a database.
 
 Manual / SSH deploy:
 
