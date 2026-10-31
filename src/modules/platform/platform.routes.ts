@@ -207,18 +207,25 @@ platformRouter.post('/tenants/:tenantId/subscription', async (req, res) => {
 
 const limitsSchema = z
   .object({
-    maxUsers: z.number().int().min(1).max(10_000).optional(),
-    maxVehicles: z.number().int().min(1).max(100_000).optional(),
+    maxUsers: z.number().int().min(1, 'At least 1').max(10_000, 'At most 10,000').optional(),
+    maxVehicles: z.number().int().min(1, 'At least 1').max(100_000, 'At most 1,00,000').optional(),
   })
   .strict();
 
 const planFields = {
-  name: z.string().trim().min(2).max(80),
+  name: z.string().trim().min(2, 'Enter a plan name').max(80, 'At most 80 characters'),
   description: optionalText(300),
-  priceMinor: z.number().int().min(0).max(100_000_000),
+  priceMinor: z
+    .number({ error: 'Enter a price' })
+    .int('Use at most 2 decimals')
+    .min(0, 'Price cannot be negative')
+    .max(100_000_000, 'Price is too large'),
   billingInterval: z.enum(['MONTHLY', 'YEARLY']),
   limits: limitsSchema,
-  features: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+  features: z
+    .array(z.string().trim().min(1).max(120, 'Each feature: at most 120 characters'))
+    .max(20, 'Up to 20 features')
+    .default([]),
   razorpayPlanId: z
     .string()
     .trim()
@@ -229,7 +236,7 @@ const planFields = {
     .transform((v) => (v === '' ? null : v))
     .nullish(),
   isActive: z.boolean().default(true),
-  sortOrder: z.number().int().min(0).max(1000).default(0),
+  sortOrder: z.number().int().min(0, '0 to 1000').max(1000, '0 to 1000').default(0),
 };
 
 const createPlanSchema = z
@@ -238,7 +245,7 @@ const createPlanSchema = z
       .string()
       .trim()
       .toLowerCase()
-      .regex(/^[a-z0-9-]{2,40}$/),
+      .regex(/^[a-z0-9-]{2,40}$/, 'Use 2-40 lowercase letters, digits or "-", e.g. growth'),
     ...planFields,
   })
   .strict();

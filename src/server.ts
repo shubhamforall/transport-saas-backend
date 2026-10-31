@@ -2,17 +2,22 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './services/prisma.js';
 import { syncPlatformAdmins } from './services/platform-admins.js';
+import { ensureDefaultPlans } from './services/default-plans.js';
 import { logger } from './utils/logger.js';
 
 const app = createApp();
 
 const server = app.listen(env.PORT, () => {
   logger.info(`Vaharo API listening on port ${env.PORT}`);
-  // Built-in Super Admins (src/config/platform-admins.ts). Never blocks or crashes startup;
-  // it is also applied on every sign-in.
-  syncPlatformAdmins().catch((err: unknown) =>
-    logger.warn({ err }, 'Could not apply the built-in Super Admin list at startup'),
-  );
+  // First-run setup; never blocks or crashes startup. Super Admins are also applied on sign-in.
+  void (async () => {
+    try {
+      await ensureDefaultPlans();
+      await syncPlatformAdmins();
+    } catch (err) {
+      logger.warn({ err }, 'Startup setup (default plans / Super Admins) did not complete');
+    }
+  })();
 });
 
 function shutdown(signal: string) {

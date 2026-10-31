@@ -11,7 +11,7 @@ import {
   razorpayConfigured,
   verifyWebhookSignature,
 } from '../../services/razorpay.js';
-import { accessFor, currentSubscription } from '../../services/subscriptions.js';
+import { accessFor, currentSubscription, ensureTrial } from '../../services/subscriptions.js';
 import { AppError } from '../../utils/app-error.js';
 import { logger } from '../../utils/logger.js';
 import { isUniqueViolation } from '../../utils/prisma-errors.js';
@@ -42,6 +42,7 @@ export async function listActivePlans() {
 }
 
 export async function getSubscriptionSummary(tenantId: string) {
+  await ensureTrial(tenantId);
   const [sub, pending, limits, vehicles, members, invites] = await Promise.all([
     currentSubscription(prisma, tenantId),
     prisma.subscription.findFirst({

@@ -290,3 +290,27 @@ describe('super admin', () => {
     });
   });
 });
+
+describe('companies created before any plan existed', () => {
+  it('get their free trial once plans exist, only once', async () => {
+    await prisma.subscription.deleteMany({});
+    await prisma.plan.updateMany({ data: { isActive: false } });
+    const o = await ownerWithTenant(app, 'Early Bird Roadways');
+    const before = await o.get(`/api/v1/tenants/${o.tenantId}/subscription`);
+    expect(before.body.subscription).toBeNull();
+
+    await prisma.plan.updateMany({ data: { isActive: true } });
+    if ((await prisma.plan.count()) === 0) {
+      await prisma.plan.create({
+        data: { code: 'late-plan', name: 'Late Plan', priceMinor: 49_900, limitsJson: {} },
+      });
+    }
+    const [a, b] = await Promise.all([
+      o.get(`/api/v1/tenants/${o.tenantId}/subscription`),
+      o.get(`/api/v1/tenants/${o.tenantId}/subscription`),
+    ]);
+    expect(a.body.subscription.status).toBe('TRIAL');
+    expect(b.body.subscription.status).toBe('TRIAL');
+    expect(await prisma.subscription.count({ where: { tenantId: o.tenantId } })).toBe(1);
+  });
+});

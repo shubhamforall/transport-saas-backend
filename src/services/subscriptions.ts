@@ -40,6 +40,21 @@ export async function startTrial(db: Db, tenantId: string) {
   });
 }
 
+/**
+ * Companies created while no plans existed have no subscription. Once plans exist, give them the
+ * free trial they would have had (once only: any earlier subscription, even expired, blocks it).
+ */
+export async function ensureTrial(tenantId: string) {
+  if ((await prisma.subscription.count({ where: { tenantId } })) > 0) return;
+  if ((await prisma.plan.count({ where: { isActive: true } })) === 0) return;
+  await prisma.$transaction(async (tx) => {
+    // Lock the company row so two requests at once cannot both start a trial.
+    await tx.$queryRaw`SELECT id FROM tenants WHERE id = ${tenantId} FOR UPDATE`;
+    if ((await tx.subscription.count({ where: { tenantId } })) > 0) return;
+    await startTrial(tx, tenantId);
+  });
+}
+
 export type AccessMode = 'FULL' | 'READ_ONLY';
 
 export interface Access {
