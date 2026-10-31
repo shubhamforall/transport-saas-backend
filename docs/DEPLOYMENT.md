@@ -48,6 +48,14 @@ Do **not** set `SHADOW_DATABASE_URL`, `TEST_DATABASE_URL` or `SEED_DEMO_PASSWORD
 
 ## 3. Deploy the API
 
+**Hostinger Node.js web app (GitHub auto-deploy):** set the build command to
+`npm run build:hostinger` (applies pending migrations, then compiles) and the entry file to
+`dist/server.js`. Environment variables from the panel must be available at build time for the
+migration step; if they are not, run `npm run db:deploy` once from a machine allowed in
+**Databases → Remote MySQL**.
+
+Manual / SSH deploy:
+
 ```bash
 git pull                      # or upload the release
 npm ci                        # installs and runs `prisma generate`
