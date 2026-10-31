@@ -1,0 +1,722 @@
+// Vaharo database schema. Tables are added milestone by milestone (see docs/DECISIONS.md).
+// Every tenant-owned table carries tenantId directly for query scoping.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  OPERATIONS
+  ACCOUNTS
+  VIEWER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  REMOVED
+}
+
+model User {
+  id              String     @id @default(cuid()) @db.VarChar(30)
+  name            String     @db.VarChar(120)
+  /// Stored trimmed and lower-cased.
+  email           String     @unique @db.VarChar(254)
+  passwordHash    String     @db.VarChar(255)
+  emailVerifiedAt DateTime?
+  isPlatformAdmin Boolean    @default(false)
+  status          UserStatus @default(ACTIVE)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  memberships         Membership[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@map("users")
+}
+
+model Tenant {
+  id           String       @id @default(cuid()) @db.VarChar(30)
+  name         String       @db.VarChar(120)
+  legalName    String?      @db.VarChar(200)
+  phone        String?      @db.VarChar(20)
+  email        String?      @db.VarChar(254)
+  addressLine1 String?      @db.VarChar(200)
+  addressLine2 String?      @db.VarChar(200)
+  city         String?      @db.VarChar(100)
+  state        String?      @db.VarChar(100)
+  postalCode   String?      @db.VarChar(10)
+  country      String       @default("IN") @db.Char(2)
+  gstin        String?      @db.VarChar(15)
+  /// Two-digit GST state code, e.g. "27" for Maharashtra.
+  stateCode    String?      @db.Char(2)
+  currency     String       @default("INR") @db.Char(3)
+  timezone     String       @default("Asia/Kolkata") @db.VarChar(64)
+  status       TenantStatus @default(ACTIVE)
+  /// Why Super Admin suspended or reactivated the company (latest change).
+  statusReason String?      @db.VarChar(500)
+
+  // Configurable business settings (project plan section 19).
+  jobNumberPrefix         String  @default("JOB-") @db.VarChar(10)
+  invoicePrefix           String  @default("INV") @db.VarChar(5)
+  defaultPaymentTermsDays Int     @default(30)
+  /// Default GST rate in basis points (1800 = 18%). 0 = no tax by default.
+  defaultTaxRateBps       Int     @default(0)
+  /// SAC code shown on invoice lines, e.g. 996511 for goods transport.
+  defaultSacCode          String? @db.VarChar(8)
+  invoiceTerms            String? @db.Text
+  /// Bank / UPI payment instructions printed on invoices.
+  paymentInstructions     String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships      Membership[]
+  auditLogs        AuditLog[]
+  customers        Customer[]
+  vehicles         Vehicle[]
+  jobs             TransportJob[]
+  invoices         Invoice[]
+  payments         Payment[]
+  emailLogs        EmailLog[]
+  invitations      Invitation[]
+  subscriptions    Subscription[]
+  sequences        TenantSequence[]
+  invoiceSequences InvoiceSequence[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+/// A user's access to one company. Never store a single tenantId on User.
+model Membership {
+  id        String           @id @default(cuid()) @db.VarChar(30)
+  tenantId  String           @db.VarChar(30)
+  userId    String           @db.VarChar(30)
+  role      MembershipRole
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, userId])
+  @@index([userId, status])
+  @@map("memberships")
+}
+
+/// Rotating refresh tokens. Only a SHA-256 hash of the token is stored.
+model RefreshToken {
+  id        String    @id @default(cuid()) @db.VarChar(30)
+  userId    String    @db.VarChar(30)
+  /// All tokens descended from one login share a family, so reuse can revoke them together.
+  familyId  String    @db.VarChar(30)
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  tenantId     String?  @db.VarChar(30)
+  actorUserId  String?  @db.VarChar(30)
+  action       String   @db.VarChar(64)
+  entityType   String   @db.VarChar(64)
+  entityId     String   @db.VarChar(64)
+  /// Never put passwords, tokens or unnecessary personal data here.
+  metadataJson Json?
+  ipHash       String?  @db.Char(64)
+  createdAt    DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 2: customers and vehicles
+// ---------------------------------------------------------------------------------------------
+
+enum CustomerType {
+  BUSINESS
+  INDIVIDUAL
+}
+
+enum CustomerStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Customer {
+  id               String         @id @default(cuid()) @db.VarChar(30)
+  tenantId         String         @db.VarChar(30)
+  customerType     CustomerType   @default(BUSINESS)
+  name             String         @db.VarChar(200)
+  contactPerson    String?        @db.VarChar(120)
+  email            String?        @db.VarChar(254)
+  phone            String?        @db.VarChar(20)
+  addressLine1     String?        @db.VarChar(200)
+  addressLine2     String?        @db.VarChar(200)
+  city             String?        @db.VarChar(100)
+  state            String?        @db.VarChar(100)
+  stateCode        String?        @db.Char(2)
+  postalCode       String?        @db.VarChar(10)
+  country          String         @default("IN") @db.Char(2)
+  /// Format-checked only; not verified with the GST portal.
+  gstin            String?        @db.VarChar(15)
+  paymentTermsDays Int?
+  notes            String?        @db.Text
+  status           CustomerStatus @default(ACTIVE)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  jobs     TransportJob[]
+  invoices Invoice[]
+  payments Payment[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, name])
+  @@index([tenantId, gstin])
+  @@index([tenantId, phone])
+  @@map("customers")
+}
+
+enum VehicleType {
+  MINI_TRUCK
+  LCV
+  MEDIUM_TRUCK
+  HEAVY_TRUCK
+  TRAILER
+  CONTAINER_TRUCK
+  PICKUP
+  OTHER
+}
+
+enum CapacityUnit {
+  TONNES
+  KG
+  CUBIC_METRES
+}
+
+enum OwnershipType {
+  OWNED
+  LEASED
+  ATTACHED
+  OTHER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Vehicle {
+  id                           String         @id @default(cuid()) @db.VarChar(30)
+  tenantId                     String         @db.VarChar(30)
+  /// Upper-case, no spaces or dashes; unique per company.
+  registrationNumberNormalized String         @db.VarChar(15)
+  registrationNumberDisplay    String         @db.VarChar(20)
+  vehicleType                  VehicleType
+  makeModel                    String?        @db.VarChar(100)
+  /// Capacity in thousandths of the unit (10.5 tonnes = 10500) so no floats are stored.
+  capacityMilli                Int?
+  capacityUnit                 CapacityUnit?
+  ownershipType                OwnershipType?
+  notes                        String?        @db.Text
+  status                       VehicleStatus  @default(ACTIVE)
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  jobs   TransportJob[]
+
+  @@unique([tenantId, registrationNumberNormalized])
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("vehicles")
+}
+
+/// Per-company counters (job numbers). Incremented inside transactions.
+model TenantSequence {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  tenantId   String   @db.VarChar(30)
+  name       String   @db.VarChar(32)
+  nextNumber Int      @default(1)
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, name])
+  @@map("tenant_sequences")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 3: transport jobs
+// ---------------------------------------------------------------------------------------------
+
+enum JobStatus {
+  DRAFT
+  BOOKED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+model TransportJob {
+  id                  String    @id @default(cuid()) @db.VarChar(30)
+  tenantId            String    @db.VarChar(30)
+  jobNumber           String    @db.VarChar(30)
+  customerId          String    @db.VarChar(30)
+  vehicleId           String?   @db.VarChar(30)
+  bookingDate         DateTime  @db.Date
+  originAddress       String?   @db.VarChar(300)
+  originCity          String    @db.VarChar(100)
+  destinationAddress  String?   @db.VarChar(300)
+  destinationCity     String    @db.VarChar(100)
+  plannedPickupDate   DateTime? @db.Date
+  actualPickupDate    DateTime? @db.Date
+  plannedDeliveryDate DateTime? @db.Date
+  actualDeliveryDate  DateTime? @db.Date
+  driverName          String?   @db.VarChar(120)
+  driverPhone         String?   @db.VarChar(20)
+  goodsDescription    String    @db.VarChar(500)
+  /// Thousandths of quantityUnit (12.5 = 12500).
+  quantityMilli       Int?
+  quantityUnit        String?   @db.VarChar(20)
+  /// LR / consignment note number.
+  lrNumber            String?   @db.VarChar(50)
+  freightAmountMinor  Int
+  discountAmountMinor Int       @default(0)
+  /// GST rate suggested when invoicing this job, in basis points.
+  taxRateBps          Int?
+  status              JobStatus @default(BOOKED)
+  internalNotes       String?   @db.Text
+  createdByUserId     String    @db.VarChar(30)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer     Customer             @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+  vehicle      Vehicle?             @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  charges      TransportJobCharge[]
+  statusEvents JobStatusEvent[]
+  invoiceLink  InvoiceJob?
+
+  @@unique([tenantId, jobNumber])
+  @@unique([tenantId, id])
+  @@index([tenantId, status, bookingDate])
+  @@index([tenantId, customerId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, actualDeliveryDate])
+  @@map("transport_jobs")
+}
+
+/// Extra charges on a job (loading, unloading, toll, ...), business-defined.
+model TransportJobCharge {
+  id             String @id @default(cuid()) @db.VarChar(30)
+  tenantId       String @db.VarChar(30)
+  transportJobId String @db.VarChar(30)
+  description    String @db.VarChar(200)
+  amountMinor    Int
+  sortOrder      Int    @default(0)
+
+  job TransportJob @relation(fields: [tenantId, transportJobId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, transportJobId])
+  @@map("transport_job_charges")
+}
+
+model JobStatusEvent {
+  id             String     @id @default(cuid()) @db.VarChar(30)
+  tenantId       String     @db.VarChar(30)
+  transportJobId String     @db.VarChar(30)
+  fromStatus     JobStatus?
+  toStatus       JobStatus
+  note           String?    @db.VarChar(500)
+  actorUserId    String     @db.VarChar(30)
+  createdAt      DateTime   @default(now())
+
+  job TransportJob @relation(fields: [tenantId, transportJobId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, transportJobId, createdAt])
+  @@map("job_status_events")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 4: invoices
+// ---------------------------------------------------------------------------------------------
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum TaxType {
+  /// No GST charged on this invoice.
+  NONE
+  /// Same state: tax split equally into CGST and SGST.
+  INTRA_STATE
+  /// Different state: IGST.
+  INTER_STATE
+}
+
+model Invoice {
+  id                     String        @id @default(cuid()) @db.VarChar(30)
+  tenantId               String        @db.VarChar(30)
+  /// Assigned by the server when the invoice is issued; null while draft.
+  invoiceNumber          String?       @db.VarChar(16)
+  customerId             String        @db.VarChar(30)
+  invoiceDate            DateTime      @db.Date
+  dueDate                DateTime?     @db.Date
+  status                 InvoiceStatus @default(DRAFT)
+  taxType                TaxType       @default(NONE)
+  placeOfSupplyStateCode String?       @db.Char(2)
+  /// Customer and company details frozen at issue time (drafts show live data).
+  customerSnapshot       Json?
+  companySnapshot        Json?
+  currency               String        @default("INR") @db.Char(3)
+  subtotalMinor          Int           @default(0)
+  discountMinor          Int           @default(0)
+  taxableMinor           Int           @default(0)
+  cgstMinor              Int           @default(0)
+  sgstMinor              Int           @default(0)
+  igstMinor              Int           @default(0)
+  taxTotalMinor          Int           @default(0)
+  grandTotalMinor        Int           @default(0)
+  /// Maintained in the same transaction as payment allocations.
+  amountPaidMinor        Int           @default(0)
+  notes                  String?       @db.Text
+  terms                  String?       @db.Text
+  createdByUserId        String        @db.VarChar(30)
+  issuedAt               DateTime?
+  issuedByUserId         String?       @db.VarChar(30)
+  cancelledAt            DateTime?
+  cancelledByUserId      String?       @db.VarChar(30)
+  cancellationReason     String?       @db.VarChar(500)
+  lastEmailedAt          DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer    Customer            @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+  items       InvoiceItem[]
+  jobLinks    InvoiceJob[]
+  allocations PaymentAllocation[]
+  emailLogs   EmailLog[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@unique([tenantId, id])
+  @@index([tenantId, status, invoiceDate])
+  @@index([tenantId, customerId])
+  @@index([tenantId, dueDate])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id                 String  @id @default(cuid()) @db.VarChar(30)
+  tenantId           String  @db.VarChar(30)
+  invoiceId          String  @db.VarChar(30)
+  description        String  @db.VarChar(500)
+  sacCode            String? @db.VarChar(8)
+  /// Thousandths (1.5 = 1500), so quantities never use floats.
+  quantityMilli      Int
+  unitPriceMinor     Int
+  discountMinor      Int     @default(0)
+  taxableAmountMinor Int
+  taxRateBps         Int     @default(0)
+  taxAmountMinor     Int
+  lineTotalMinor     Int
+  sortOrder          Int     @default(0)
+
+  invoice Invoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, invoiceId])
+  @@map("invoice_items")
+}
+
+/// Links jobs to the invoice billing them. A job can be on only one non-cancelled invoice
+/// (the row is deleted when a draft is deleted or an invoice is cancelled).
+model InvoiceJob {
+  id             String   @id @default(cuid()) @db.VarChar(30)
+  tenantId       String   @db.VarChar(30)
+  invoiceId      String   @db.VarChar(30)
+  transportJobId String   @db.VarChar(30)
+  createdAt      DateTime @default(now())
+
+  invoice Invoice      @relation(fields: [tenantId, invoiceId], references: [tenantId, id], onDelete: Cascade)
+  job     TransportJob @relation(fields: [tenantId, transportJobId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, transportJobId])
+  @@index([tenantId, invoiceId])
+  @@map("invoice_jobs")
+}
+
+/// Invoice numbers per company and Indian financial year (April to March).
+model InvoiceSequence {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  tenantId      String   @db.VarChar(30)
+  /// e.g. "26-27"
+  financialYear String   @db.VarChar(5)
+  nextNumber    Int      @default(1)
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, financialYear])
+  @@map("invoice_sequences")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 5: payments, email, password reset
+// ---------------------------------------------------------------------------------------------
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  UPI
+  CHEQUE
+  OTHER
+}
+
+enum PaymentStatus {
+  RECORDED
+  VOIDED
+}
+
+model Payment {
+  id               String        @id @default(cuid()) @db.VarChar(30)
+  tenantId         String        @db.VarChar(30)
+  customerId       String        @db.VarChar(30)
+  paymentDate      DateTime      @db.Date
+  amountMinor      Int
+  currency         String        @default("INR") @db.Char(3)
+  method           PaymentMethod
+  reference        String?       @db.VarChar(100)
+  notes            String?       @db.Text
+  status           PaymentStatus @default(RECORDED)
+  recordedByUserId String        @db.VarChar(30)
+  voidedAt         DateTime?
+  voidedByUserId   String?       @db.VarChar(30)
+  voidReason       String?       @db.VarChar(500)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer    Customer            @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+  allocations PaymentAllocation[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, paymentDate])
+  @@index([tenantId, customerId])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id                   String   @id @default(cuid()) @db.VarChar(30)
+  tenantId             String   @db.VarChar(30)
+  paymentId            String   @db.VarChar(30)
+  invoiceId            String   @db.VarChar(30)
+  allocatedAmountMinor Int
+  createdAt            DateTime @default(now())
+
+  payment Payment @relation(fields: [tenantId, paymentId], references: [tenantId, id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([paymentId, invoiceId])
+  @@index([tenantId, invoiceId])
+  @@map("payment_allocations")
+}
+
+enum EmailStatus {
+  SENDING
+  SENT
+  FAILED
+}
+
+model EmailLog {
+  id                String      @id @default(cuid()) @db.VarChar(30)
+  tenantId          String?     @db.VarChar(30)
+  invoiceId         String?     @db.VarChar(30)
+  /// invoice | invitation | password_reset
+  kind              String      @db.VarChar(32)
+  recipient         String      @db.VarChar(254)
+  subject           String      @db.VarChar(300)
+  status            EmailStatus @default(SENDING)
+  providerMessageId String?     @db.VarChar(255)
+  attemptCount      Int         @default(0)
+  /// Short, safe error summary. Never raw SMTP responses or credentials.
+  lastErrorSafe     String?     @db.VarChar(300)
+  sentAt            DateTime?
+  createdByUserId   String?     @db.VarChar(30)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  tenant  Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, invoiceId, createdAt])
+  @@map("email_logs")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid()) @db.VarChar(30)
+  userId    String    @db.VarChar(30)
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 6: team invitations
+// ---------------------------------------------------------------------------------------------
+
+model Invitation {
+  id              String         @id @default(cuid()) @db.VarChar(30)
+  tenantId        String         @db.VarChar(30)
+  email           String         @db.VarChar(254)
+  role            MembershipRole
+  tokenHash       String         @unique @db.Char(64)
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  acceptedUserId  String?        @db.VarChar(30)
+  revokedAt       DateTime?
+  invitedByUserId String         @db.VarChar(30)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, email])
+  @@map("invitations")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Milestone 7: plans, subscriptions, webhooks
+// ---------------------------------------------------------------------------------------------
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+model Plan {
+  id              String          @id @default(cuid()) @db.VarChar(30)
+  code            String          @unique @db.VarChar(40)
+  name            String          @db.VarChar(80)
+  description     String?         @db.VarChar(300)
+  priceMinor      Int
+  currency        String          @default("INR") @db.Char(3)
+  billingInterval BillingInterval @default(MONTHLY)
+  /// e.g. { "maxUsers": 3, "maxVehicles": 10 }. Missing key = unlimited.
+  limitsJson      Json
+  featuresJson    Json?
+  /// Razorpay plan id (plan_...) used at checkout.
+  razorpayPlanId  String?         @db.VarChar(64)
+  isActive        Boolean         @default(true)
+  sortOrder       Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  PENDING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum BillingProvider {
+  NONE
+  RAZORPAY
+  MANUAL
+}
+
+/// A company's platform subscription (what the company pays Vaharo). Latest row is current.
+model Subscription {
+  id                     String             @id @default(cuid()) @db.VarChar(30)
+  tenantId               String             @db.VarChar(30)
+  planId                 String             @db.VarChar(30)
+  provider               BillingProvider    @default(NONE)
+  providerCustomerId     String?            @db.VarChar(64)
+  providerSubscriptionId String?            @unique @db.VarChar(64)
+  status                 SubscriptionStatus
+  trialEndsAt            DateTime?
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+model SubscriptionWebhookEvent {
+  id              String          @id @default(cuid()) @db.VarChar(30)
+  provider        BillingProvider
+  providerEventId String          @db.VarChar(100)
+  eventType       String          @db.VarChar(100)
+  status          WebhookStatus   @default(RECEIVED)
+  receivedAt      DateTime        @default(now())
+  processedAt     DateTime?
+  safeError       String?         @db.VarChar(300)
+
+  @@unique([provider, providerEventId])
+  @@index([receivedAt])
+  @@map("subscription_webhook_events")
+}
