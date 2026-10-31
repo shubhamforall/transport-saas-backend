@@ -53,15 +53,15 @@ const companies = [
   {
     owner: { name: 'Demo Owner', email: 'owner@demo.vaharo.local' },
     tenant: {
-      name: 'Patil Transport Co. (Sample)',
-      legalName: 'Patil Transport Company (Sample Data)',
+      name: 'Deccan Roadways Co. (Sample)',
+      legalName: 'Deccan Roadways Private Limited (Sample Data)',
       addressLine1: 'Plot 12, MIDC Bhosari',
       city: 'Pune',
       state: 'Maharashtra',
       stateCode: '27',
       postalCode: '411026',
       gstin: '27ABCDE1234F1Z5',
-      email: 'billing@patiltransport.example',
+      email: 'billing@deccanroadways.example',
       defaultTaxRateBps: 1800,
       defaultSacCode: '996511',
       paymentInstructions: 'Sample bank details - replace before use.\nUPI: sample@upi',

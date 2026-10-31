@@ -93,7 +93,7 @@ Sets the `vaharo_csrf` cookie and returns `{ "csrfToken": "..." }`.
 #### `POST /auth/register` → `202` (or `201` from an invitation)
 
 ```json
-{ "name": "Asha Patil", "email": "asha@example.com", "password": "at-least-8-chars" }
+{ "name": "Asha Kulkarni", "email": "asha@example.com", "password": "at-least-8-chars" }
 ```
 
 Email is trimmed and lower-cased. Password: 8+ characters, at most 72 bytes.
@@ -158,7 +158,7 @@ Revokes the refresh token and clears cookies. Works even if the access token has
 {
   "user": {
     "id": "c…",
-    "name": "Asha Patil",
+    "name": "Asha Kulkarni",
     "email": "asha@example.com",
     "isPlatformAdmin": false
   },
@@ -166,7 +166,7 @@ Revokes the refresh token and clears cookies. Works even if the access token has
     {
       "membershipId": "c…",
       "tenantId": "c…",
-      "tenantName": "Patil Transport Co.",
+      "tenantName": "Deccan Roadways Co.",
       "role": "OWNER",
       "permissions": ["tenant.read", "tenant.update", "..."]
     }
@@ -178,7 +178,7 @@ Only active memberships in active companies are listed.
 
 #### `PATCH /auth/me` → `200`
 
-`{ "name": "Asha R Patil" }`. Updates the signed-in person's own name (2–120 characters) and
+`{ "name": "Asha R Kulkarni" }`. Updates the signed-in person's own name (2–120 characters) and
 returns the `GET /auth/me` body. The email cannot be changed here (any other field → `400`).
 
 #### `POST /auth/change-password` → `204`
@@ -197,7 +197,7 @@ All require sign-in.
 ```json
 {
   "id": "c…",
-  "name": "Patil Transport Co.",
+  "name": "Deccan Roadways Co.",
   "legalName": null,
   "phone": "+919876543210",
   "email": null,

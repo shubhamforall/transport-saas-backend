@@ -40,7 +40,7 @@ describe('registration', () => {
     const client = await browserClient(app);
     const email = uniqueEmail();
     const res = await client.post('/api/v1/auth/register', {
-      name: '  Asha Patil ',
+      name: '  Asha Kulkarni ',
       email: `  ${email.toUpperCase()} `,
       password: PASSWORD,
     });
@@ -51,14 +51,14 @@ describe('registration', () => {
     expect((await client.get('/api/v1/auth/me')).status).toBe(401);
 
     const stored = await prisma.user.findUniqueOrThrow({ where: { email } });
-    expect(stored.name).toBe('Asha Patil');
+    expect(stored.name).toBe('Asha Kulkarni');
     expect(stored.emailVerifiedAt).toBeNull();
     expect(stored.passwordHash).toMatch(/^\$2[aby]\$/);
 
     const code = takeVerificationCode(email);
     const verified = await client.post('/api/v1/auth/verify-email', { email, code });
     expect(verified.status).toBe(200);
-    expect(verified.body.user).toMatchObject({ name: 'Asha Patil', email });
+    expect(verified.body.user).toMatchObject({ name: 'Asha Kulkarni', email });
     expect(verified.body.memberships).toEqual([]);
     expect(JSON.stringify(verified.body)).not.toMatch(/passwordHash|\$2[aby]\$/);
 

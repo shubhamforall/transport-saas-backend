@@ -13,7 +13,7 @@ type Owner = Awaited<ReturnType<typeof ownerWithTenant>>;
 
 /** Company with address, GSTIN and 18% default GST, a customer and a delivered job. */
 async function readyCompany(opts: { customerState?: string } = {}) {
-  const o = await ownerWithTenant(app, 'Patil Transport Co.');
+  const o = await ownerWithTenant(app, 'Deccan Roadways Co.');
   await o.patch(base(o.tenantId), {
     addressLine1: 'Plot 12, MIDC',
     city: 'Pune',
@@ -22,7 +22,7 @@ async function readyCompany(opts: { customerState?: string } = {}) {
     gstin: '27ABCDE1234F1Z5',
     defaultTaxRateBps: 1800,
     defaultSacCode: '996511',
-    paymentInstructions: 'UPI: patil@bank',
+    paymentInstructions: 'UPI: deccan@bank',
   });
   const c = await o.post(`${base(o.tenantId)}/customers`, {
     name: 'ABC Ltd.',
@@ -108,7 +108,7 @@ describe('job to invoice (Mumbai -> Pune)', () => {
       invoiceNumber: 'INV/26-27/0001',
       balanceMinor: 1_475_000,
       billTo: { name: 'ABC Ltd.', city: 'Mumbai' },
-      from: { name: 'Patil Transport Co.', gstin: '27ABCDE1234F1Z5' },
+      from: { name: 'Deccan Roadways Co.', gstin: '27ABCDE1234F1Z5' },
     });
     expect((await o.get(`${base(o.tenantId)}/jobs/${jobId}`)).body.invoiceState).toBe('INVOICED');
 

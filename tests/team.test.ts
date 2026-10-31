@@ -27,7 +27,7 @@ const registerWith = (email: string) => registerVerified(app, email, 'Invited Pe
 
 describe('invitations', () => {
   it('owner invites by email; invitee accepts and gets the role', async () => {
-    const o = await ownerWithTenant(app, 'Patil Transport');
+    const o = await ownerWithTenant(app, 'Deccan Roadways');
     const email = uniqueEmail('driver.manager');
     const inv = await o.post(`${base(o.tenantId)}/invitations`, {
       email: email.toUpperCase(),
@@ -36,7 +36,7 @@ describe('invitations', () => {
     expect(inv.status).toBe(201);
     expect(inv.body).toMatchObject({ email, role: 'OPERATIONS', emailSent: true });
     expect(JSON.stringify(inv.body)).not.toMatch(/token/i);
-    expect(testOutbox[0]!.subject).toBe('Join Patil Transport on Vaharo');
+    expect(testOutbox[0]!.subject).toBe('Join Deccan Roadways on Vaharo');
 
     const token = tokenFromOutbox();
     const stored = await prisma.invitation.findFirstOrThrow({ where: { email } });
@@ -46,7 +46,7 @@ describe('invitations', () => {
       await browserClient(app)
     ).get(`/api/v1/invitations/lookup?token=${encodeURIComponent(token)}`);
     expect(lookup.body).toMatchObject({
-      companyName: 'Patil Transport',
+      companyName: 'Deccan Roadways',
       email,
       role: 'OPERATIONS',
       expired: false,

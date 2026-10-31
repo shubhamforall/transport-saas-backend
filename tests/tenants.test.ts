@@ -13,7 +13,7 @@ describe('company onboarding', () => {
   it('creating a company makes the creator its Owner and records an audit entry', async () => {
     const user = await signedInUser(app);
     const res = await user.post('/api/v1/tenants', {
-      name: 'Patil Transport Co.',
+      name: 'Deccan Roadways Co.',
       gstin: '27abcde1234f1z5',
       stateCode: '27',
       postalCode: '411001',
@@ -22,7 +22,7 @@ describe('company onboarding', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
-      name: 'Patil Transport Co.',
+      name: 'Deccan Roadways Co.',
       gstin: '27ABCDE1234F1Z5',
       phone: '+919876543210',
       currency: 'INR',
@@ -43,7 +43,7 @@ describe('company onboarding', () => {
     expect(me.body.memberships).toEqual([
       expect.objectContaining({
         tenantId: res.body.id,
-        tenantName: 'Patil Transport Co.',
+        tenantName: 'Deccan Roadways Co.',
         role: 'OWNER',
       }),
     ]);
