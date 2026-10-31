@@ -18,6 +18,8 @@ export const registerSchema = z.object({
   name: z.string().trim().min(2, 'Enter your full name').max(120),
   email: emailSchema,
   password: passwordSchema,
+  /** Set when signing up from a team invitation link; lets the invitee skip the email code. */
+  invitationToken: z.string().min(20).max(200).optional(),
 });
 
 export const loginSchema = z.object({

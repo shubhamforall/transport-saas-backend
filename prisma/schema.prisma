@@ -49,6 +49,7 @@ model User {
   memberships         Membership[]
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+  verificationCodes   EmailVerificationCode[]
 
   @@map("users")
 }
@@ -569,7 +570,7 @@ model EmailLog {
   id                String      @id @default(cuid()) @db.VarChar(30)
   tenantId          String?     @db.VarChar(30)
   invoiceId         String?     @db.VarChar(30)
-  /// invoice | invitation | password_reset
+  /// invoice | invitation | password_reset | email_verification
   kind              String      @db.VarChar(32)
   recipient         String      @db.VarChar(254)
   subject           String      @db.VarChar(300)
@@ -602,6 +603,23 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+/// 6-digit sign-up code sent by email. Only an HMAC of the code is stored.
+model EmailVerificationCode {
+  id        String    @id @default(cuid()) @db.VarChar(30)
+  userId    String    @db.VarChar(30)
+  codeHash  String    @db.Char(64)
+  expiresAt DateTime
+  /// Wrong guesses against this code; it stops working at the limit.
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("email_verification_codes")
 }
 
 // ---------------------------------------------------------------------------------------------

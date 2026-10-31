@@ -150,3 +150,18 @@ Record each decision with date, choice, rationale and impact.
 
 - **Choice:** Prisma and MySQL are added in Milestone 1, not Milestone 0.
 - **Rationale:** No models exist yet; adding an empty schema gives no value.
+
+## 2026-11-01 — Email verification at sign-up
+
+- **Choice:** New accounts confirm their email with a 6-digit code (10 minutes, 5 tries, newest
+  code only, 60 s between sends, 5 codes per hour). No session until verified; sign-in with the
+  right password on an unverified account sends a code instead. Codes are stored as an HMAC
+  bound to the user (a plain hash of 6 digits is trivially reversible). The code is in the email
+  subject for easy reading from phone notifications, but not in the email log.
+- **Unverified accounts do not hold the email:** signing up again replaces them, so an address
+  cannot be squatted by someone who cannot read its inbox.
+- **Skips the code:** signing up from a valid team invitation for the same email, and completing
+  a password reset (both prove the inbox).
+- **Existing accounts:** marked verified by the migration so nobody is locked out.
+- **Impact:** real sign-ups need working SMTP. Without it, development saves the email to
+  `tmp/outbox/`.

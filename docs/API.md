@@ -83,25 +83,65 @@ Roles: `OWNER`, `ADMIN`, `OPERATIONS`, `ACCOUNTS`, `VIEWER`. Responses include t
 
 ### Auth
 
-Login, register and refresh are rate-limited per IP (default 20 per 15 minutes).
+Login, register, email verification and refresh are rate-limited per IP (default 20 per 15
+minutes).
 
 #### `GET /auth/csrf`
 
 Sets the `vaharo_csrf` cookie and returns `{ "csrfToken": "..." }`.
 
-#### `POST /auth/register` → `201`
+#### `POST /auth/register` → `202` (or `201` from an invitation)
 
 ```json
 { "name": "Asha Patil", "email": "asha@example.com", "password": "at-least-8-chars" }
 ```
 
-Email is trimmed and lower-cased. Password: 8+ characters, at most 72 bytes. Signs the user in
-(sets cookies) and returns the same body as `GET /auth/me`. Duplicate email → `409 EMAIL_TAKEN`.
+Email is trimmed and lower-cased. Password: 8+ characters, at most 72 bytes.
+
+Creates an **unverified** account, emails a 6-digit code and does **not** sign in:
+
+```json
+{ "verificationRequired": true, "email": "asha@example.com", "emailSent": true }
+```
+
+`emailSent: false` means delivery failed; the user can ask for a new code.
+
+- Email already belongs to a **verified** account → `409 EMAIL_TAKEN`.
+- Email belongs to an account that was never verified → that account's name and password are
+  replaced and a new code is sent, so nobody can hold an address they do not own.
+- Optional `invitationToken`: the token from a valid, pending team invitation **for the same
+  email**. The email counts as verified, the user is signed in and the response is `201` with
+  the `GET /auth/me` body.
+- More than 5 codes in an hour for the email → `429 TOO_MANY_CODES`.
+
+#### `POST /auth/verify-email` → `200`
+
+`{ "email": "...", "code": "482913" }` (spaces in the code are ignored). On success marks the email
+verified, signs in (sets cookies) and returns the `GET /auth/me` body.
+
+Codes expire after 10 minutes, only the newest code works, and each code allows 5 tries.
+
+| Error                  | When                                                        |
+| ---------------------- | ----------------------------------------------------------- |
+| `400 CODE_INVALID`     | Wrong code; `fieldErrors.code` says how many tries are left |
+| `400 CODE_LOCKED`      | 5 wrong tries; request a new code                           |
+| `400 CODE_EXPIRED`     | Expired, replaced, or no pending code for this email        |
+| `409 ALREADY_VERIFIED` | The email is already verified; sign in instead              |
+
+#### `POST /auth/resend-verification` → `202`
+
+`{ "email": "..." }`. Sends a new code (the old one stops working). Always the same `202` answer
+for unknown or already verified emails, without sending anything. `429 RESEND_TOO_SOON` within
+60 seconds of the last code, `429 TOO_MANY_CODES` after 5 codes in an hour, `503 EMAIL_FAILED`
+if delivery failed.
 
 #### `POST /auth/login` → `200`
 
 `{ "email": "...", "password": "..." }`. Wrong email and wrong password return the same
 `401 INVALID_CREDENTIALS`. Returns the `GET /auth/me` body.
+
+Right password but the email is not verified yet → `403 EMAIL_NOT_VERIFIED`, and a new code is
+emailed (subject to the limits above). The app then shows the code screen.
 
 #### `POST /auth/refresh` → `204`
 
@@ -135,6 +175,18 @@ Revokes the refresh token and clears cookies. Works even if the access token has
 ```
 
 Only active memberships in active companies are listed.
+
+#### `PATCH /auth/me` → `200`
+
+`{ "name": "Asha R Patil" }`. Updates the signed-in person's own name (2–120 characters) and
+returns the `GET /auth/me` body. The email cannot be changed here (any other field → `400`).
+
+#### `POST /auth/change-password` → `204`
+
+`{ "currentPassword": "...", "newPassword": "..." }`. Wrong current password →
+`400 WRONG_PASSWORD` (`fieldErrors.currentPassword`); same as the current one →
+`400 SAME_PASSWORD`. Signs out every other device (refresh tokens revoked) and sets fresh session
+cookies for this one. Rate-limited like login.
 
 ### Companies (tenants)
 
@@ -290,10 +342,10 @@ dated this month).
 
 ### Password reset
 
-| Method | Path                    | Notes                                                                                                                      |
-| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/auth/forgot-password` | `{ email }` → always `202` with the same message; emails a 1-hour single-use link to `APP_BASE_URL/reset-password?token=…` |
-| POST   | `/auth/reset-password`  | `{ token, password }` → `204`; signs out all sessions. Bad/expired/used link → `400 RESET_LINK_INVALID`                    |
+| Method | Path                    | Notes                                                                                                                                                                           |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/auth/forgot-password` | `{ email }` → always `202` with the same message; emails a 1-hour single-use link to `APP_BASE_URL/reset-password?token=…`. Completing a reset also marks the email as verified |
+| POST   | `/auth/reset-password`  | `{ token, password }` → `204`; signs out all sessions. Bad/expired/used link → `400 RESET_LINK_INVALID`                                                                         |
 
 ### Plans and subscriptions
 

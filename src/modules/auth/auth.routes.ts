@@ -13,6 +13,18 @@ import {
   resetPassword,
   resetPasswordSchema,
 } from './password-reset.js';
+import {
+  changePassword,
+  changePasswordSchema,
+  updateProfile,
+  updateProfileSchema,
+} from './account.js';
+import {
+  resendVerification,
+  resendVerificationSchema,
+  verifyEmail,
+  verifyEmailSchema,
+} from './email-verification.js';
 
 export interface AuthRouterOptions {
   rateLimitMax: number;
@@ -45,15 +57,40 @@ export function createAuthRouter({ rateLimitMax }: AuthRouterOptions) {
 
   router.post('/register', authLimiter, async (req, res) => {
     const input = registerSchema.parse(req.body);
-    const { userId, refreshToken } = await register(input, req);
+    const result = await register(input, req);
+    if (!result.verified) {
+      // No session yet: the account is usable once the emailed code is confirmed.
+      res.status(202).json({
+        verificationRequired: true,
+        email: input.email,
+        emailSent: result.emailSent,
+      });
+      return;
+    }
+    const session = await createSession(result.userId, result.refreshToken);
+    setAuthCookies(res, session.accessToken, session.refreshToken);
+    res.status(201).json(await getMe(result.userId));
+  });
+
+  router.post('/verify-email', authLimiter, async (req, res) => {
+    const { email, code } = verifyEmailSchema.parse(req.body);
+    const { userId, refreshToken } = await verifyEmail(email, code, req);
     const session = await createSession(userId, refreshToken);
     setAuthCookies(res, session.accessToken, session.refreshToken);
-    res.status(201).json(await getMe(userId));
+    res.json(await getMe(userId));
+  });
+
+  router.post('/resend-verification', authLimiter, async (req, res) => {
+    const { email } = resendVerificationSchema.parse(req.body);
+    await resendVerification(email, req);
+    res
+      .status(202)
+      .json({ message: 'If this email is waiting for verification, a new code is on its way.' });
   });
 
   router.post('/login', authLimiter, async (req, res) => {
     const input = loginSchema.parse(req.body);
-    const { userId, refreshToken } = await login(input);
+    const { userId, refreshToken } = await login(input, req);
     const session = await createSession(userId, refreshToken);
     setAuthCookies(res, session.accessToken, session.refreshToken);
     res.json(await getMe(userId));
@@ -95,6 +132,22 @@ export function createAuthRouter({ rateLimitMax }: AuthRouterOptions) {
 
   router.get('/me', requireAuth, async (req, res) => {
     res.json(await getMe(req.auth!.userId));
+  });
+
+  router.patch('/me', requireAuth, async (req, res) => {
+    const { name } = updateProfileSchema.parse(req.body);
+    await updateProfile(req.auth!.userId, name, req);
+    res.json(await getMe(req.auth!.userId));
+  });
+
+  router.post('/change-password', requireAuth, authLimiter, async (req, res) => {
+    const input = changePasswordSchema.parse(req.body);
+    const userId = req.auth!.userId;
+    const refreshToken = await changePassword(userId, input, req);
+    // Other devices are signed out; this one gets a fresh session.
+    const session = await createSession(userId, refreshToken);
+    setAuthCookies(res, session.accessToken, session.refreshToken);
+    res.status(204).end();
   });
 
   return router;

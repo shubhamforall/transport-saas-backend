@@ -3,12 +3,31 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { prisma } from '../src/services/prisma.js';
 import { sha256 } from '../src/utils/crypto.js';
-import { PASSWORD, browserClient, resetDb, signedInUser, uniqueEmail } from './helpers.js';
+import {
+  PASSWORD,
+  browserClient,
+  resetDb,
+  signedInUser,
+  takeVerificationCode,
+  uniqueEmail,
+} from './helpers.js';
 
 const app = createApp();
 
 beforeAll(resetDb);
 afterAll(() => prisma.$disconnect());
+
+/** Registers and verifies, returning the verify response (it carries the session cookies). */
+async function registerAndVerify(name: string) {
+  const client = await browserClient(app);
+  const email = uniqueEmail();
+  await client.post('/api/v1/auth/register', { name, email, password: PASSWORD });
+  const res = await client.post('/api/v1/auth/verify-email', {
+    email,
+    code: takeVerificationCode(email),
+  });
+  return { client, email, res };
+}
 
 function cookieValue(res: request.Response, name: string): string | undefined {
   const raw = res.headers['set-cookie'] as unknown as string[] | undefined;
@@ -17,7 +36,7 @@ function cookieValue(res: request.Response, name: string): string | undefined {
 }
 
 describe('registration', () => {
-  it('creates a user, signs them in with HttpOnly cookies and never returns the password hash', async () => {
+  it('creates an unverified user, emails a code, and signs in only after the code', async () => {
     const client = await browserClient(app);
     const email = uniqueEmail();
     const res = await client.post('/api/v1/auth/register', {
@@ -26,22 +45,33 @@ describe('registration', () => {
       password: PASSWORD,
     });
 
-    expect(res.status).toBe(201);
-    expect(res.body.user).toMatchObject({ name: 'Asha Patil', email });
-    expect(res.body.memberships).toEqual([]);
-    expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|\$2[aby]\$/);
-
-    const cookies = (res.headers['set-cookie'] as unknown as string[]).join('\n');
-    expect(cookies).toMatch(/vaharo_at=[^;]+;.*HttpOnly/);
-    expect(cookies).toMatch(/vaharo_rt=[^;]+;.*Path=\/api\/v1\/auth;.*HttpOnly/);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ verificationRequired: true, email, emailSent: true });
+    expect(res.headers['set-cookie']?.toString() ?? '').not.toMatch(/vaharo_at=|vaharo_rt=/);
+    expect((await client.get('/api/v1/auth/me')).status).toBe(401);
 
     const stored = await prisma.user.findUniqueOrThrow({ where: { email } });
-    expect(stored.passwordHash).not.toBe(PASSWORD);
+    expect(stored.name).toBe('Asha Patil');
+    expect(stored.emailVerifiedAt).toBeNull();
     expect(stored.passwordHash).toMatch(/^\$2[aby]\$/);
+
+    const code = takeVerificationCode(email);
+    const verified = await client.post('/api/v1/auth/verify-email', { email, code });
+    expect(verified.status).toBe(200);
+    expect(verified.body.user).toMatchObject({ name: 'Asha Patil', email });
+    expect(verified.body.memberships).toEqual([]);
+    expect(JSON.stringify(verified.body)).not.toMatch(/passwordHash|\$2[aby]\$/);
+
+    const cookies = (verified.headers['set-cookie'] as unknown as string[]).join('\n');
+    expect(cookies).toMatch(/vaharo_at=[^;]+;.*HttpOnly/);
+    expect(cookies).toMatch(/vaharo_rt=[^;]+;.*Path=\/api\/v1\/auth;.*HttpOnly/);
 
     const me = await client.get('/api/v1/auth/me');
     expect(me.status).toBe(200);
     expect(me.body.user.email).toBe(email);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { email } })).emailVerifiedAt,
+    ).not.toBeNull();
   });
 
   it('rejects a duplicate email with 409 and a field error', async () => {
@@ -145,12 +175,7 @@ describe('login and logout', () => {
 
 describe('refresh token rotation', () => {
   it('rotates the refresh token and stores only its hash', async () => {
-    const client = await browserClient(app);
-    const reg = await client.post('/api/v1/auth/register', {
-      name: 'Rotate Me',
-      email: uniqueEmail(),
-      password: PASSWORD,
-    });
+    const { client, res: reg } = await registerAndVerify('Rotate Me');
     const first = cookieValue(reg, 'vaharo_rt')!;
     expect(
       await prisma.refreshToken.findUnique({ where: { tokenHash: sha256(first) } }),
@@ -166,12 +191,7 @@ describe('refresh token rotation', () => {
   });
 
   it('reusing an old refresh token after the grace window revokes the whole family', async () => {
-    const client = await browserClient(app);
-    const reg = await client.post('/api/v1/auth/register', {
-      name: 'Stolen Token',
-      email: uniqueEmail(),
-      password: PASSWORD,
-    });
+    const { client, res: reg } = await registerAndVerify('Stolen Token');
     const userId = reg.body.user.id as string;
     const stolen = cookieValue(reg, 'vaharo_rt')!;
     expect((await client.post('/api/v1/auth/refresh')).status).toBe(204);
@@ -221,5 +241,65 @@ describe('rate limiting', () => {
     const blocked = await attempt();
     expect(blocked.status).toBe(429);
     expect(blocked.body.error.code).toBe('TOO_MANY_REQUESTS');
+  });
+});
+
+describe('profile', () => {
+  it('updates the name and validates it', async () => {
+    const user = await signedInUser(app, 'Old Name');
+    const res = await user.patch('/api/v1/auth/me', { name: '  New Name ' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.name).toBe('New Name');
+    expect((await user.patch('/api/v1/auth/me', { name: 'A' })).status).toBe(400);
+    // Email cannot be changed here.
+    expect((await user.patch('/api/v1/auth/me', { name: 'Ok Name', email: 'x@y.co' })).status).toBe(
+      400,
+    );
+    expect(
+      await prisma.auditLog.count({
+        where: { actorUserId: user.userId, action: 'user.profile_updated' },
+      }),
+    ).toBe(1);
+  });
+
+  it('requires a session', async () => {
+    const client = await browserClient(app);
+    expect((await client.patch('/api/v1/auth/me', { name: 'Someone' })).status).toBe(401);
+  });
+
+  it('changes the password with the current one, signs out other devices, keeps this one', async () => {
+    const user = await signedInUser(app);
+    const other = await browserClient(app);
+    await other.post('/api/v1/auth/login', { email: user.email, password: PASSWORD });
+
+    const wrong = await user.post('/api/v1/auth/change-password', {
+      currentPassword: 'not-my-password',
+      newPassword: 'Brand-New-Pass1',
+    });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error.fieldErrors.currentPassword).toBeDefined();
+
+    const same = await user.post('/api/v1/auth/change-password', {
+      currentPassword: PASSWORD,
+      newPassword: PASSWORD,
+    });
+    expect(same.body.error.code).toBe('SAME_PASSWORD');
+
+    const ok = await user.post('/api/v1/auth/change-password', {
+      currentPassword: PASSWORD,
+      newPassword: 'Brand-New-Pass1',
+    });
+    expect(ok.status).toBe(204);
+    expect((await user.post('/api/v1/auth/refresh')).status).toBe(204);
+    expect((await other.post('/api/v1/auth/refresh')).status).toBe(401);
+
+    const fresh = await browserClient(app);
+    expect(
+      (await fresh.post('/api/v1/auth/login', { email: user.email, password: PASSWORD })).status,
+    ).toBe(401);
+    expect(
+      (await fresh.post('/api/v1/auth/login', { email: user.email, password: 'Brand-New-Pass1' }))
+        .status,
+    ).toBe(200);
   });
 });

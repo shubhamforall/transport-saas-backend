@@ -7,50 +7,134 @@ import { AppError } from '../../utils/app-error.js';
 import type { LoginInput, RegisterInput } from './auth.schemas.js';
 import { burnPasswordCheck, hashPassword, verifyPassword } from './password.js';
 import { issueRefreshToken, signAccessToken } from './tokens.js';
+import { sendVerificationCode } from './email-verification.js';
+import { sha256 } from '../../utils/crypto.js';
 
 export interface SessionTokens {
   accessToken: string;
   refreshToken: string;
 }
 
-export async function register(input: RegisterInput, req: Request) {
+const EMAIL_TAKEN = () =>
+  new AppError(409, 'EMAIL_TAKEN', 'An account with this email already exists. Try signing in.', {
+    email: ['An account with this email already exists'],
+  });
+
+/**
+ * A pending team invitation for this email proves the person can read that inbox, so they can
+ * skip the code.
+ */
+async function invitationProvesEmail(token: string | undefined, email: string) {
+  if (!token) return false;
+  const inv = await prisma.invitation.findUnique({
+    where: { tokenHash: sha256(token) },
+    select: {
+      email: true,
+      acceptedAt: true,
+      revokedAt: true,
+      expiresAt: true,
+      tenant: { select: { status: true } },
+    },
+  });
+  return Boolean(
+    inv &&
+    inv.email === email &&
+    !inv.acceptedAt &&
+    !inv.revokedAt &&
+    inv.expiresAt > new Date() &&
+    inv.tenant.status === 'ACTIVE',
+  );
+}
+
+export type RegisterResult =
+  | { verified: true; userId: string; refreshToken: string }
+  | { verified: false; emailSent: boolean };
+
+/**
+ * New accounts must confirm their email with a 6-digit code before they can sign in.
+ * An account that was never verified does not hold the email: registering again replaces it,
+ * so nobody can block an address they do not own.
+ */
+export async function register(input: RegisterInput, req: Request): Promise<RegisterResult> {
   const passwordHash = await hashPassword(input.password);
+  const viaInvitation = await invitationProvesEmail(input.invitationToken, input.email);
+  const existing = await prisma.user.findUnique({
+    where: { email: input.email },
+    select: { id: true, emailVerifiedAt: true },
+  });
+  if (existing?.emailVerifiedAt) throw EMAIL_TAKEN();
+
+  let user: { id: string; name: string; email: string };
   try {
-    return await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: { name: input.name, email: input.email, passwordHash },
-        select: { id: true },
-      });
+    user = await prisma.$transaction(async (tx) => {
+      const data = {
+        name: input.name,
+        passwordHash,
+        emailVerifiedAt: viaInvitation ? new Date() : null,
+      };
+      const saved = existing
+        ? await tx.user.update({
+            // Conditional, so a concurrent verification of the old account is never overwritten.
+            where: { id: existing.id, emailVerifiedAt: null },
+            data,
+            select: { id: true, name: true, email: true },
+          })
+        : await tx.user.create({
+            data: { ...data, email: input.email },
+            select: { id: true, name: true, email: true },
+          });
       await audit(
         tx,
-        { actorUserId: user.id, action: 'user.registered', entityType: 'User', entityId: user.id },
+        {
+          actorUserId: saved.id,
+          action: existing ? 'user.registration_replaced' : 'user.registered',
+          entityType: 'User',
+          entityId: saved.id,
+          metadata: viaInvitation ? { verifiedBy: 'invitation' } : undefined,
+        },
         req,
       );
-      const refreshToken = await issueRefreshToken(tx, user.id);
-      return { userId: user.id, refreshToken };
+      return saved;
     });
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new AppError(
-        409,
-        'EMAIL_TAKEN',
-        'An account with this email already exists. Try signing in.',
-        {
-          email: ['An account with this email already exists'],
-        },
-      );
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      (err.code === 'P2002' || err.code === 'P2025')
+    ) {
+      throw EMAIL_TAKEN();
     }
     throw err;
   }
+
+  if (viaInvitation) {
+    return {
+      verified: true,
+      userId: user.id,
+      refreshToken: await issueRefreshToken(prisma, user.id),
+    };
+  }
+  const status = await sendVerificationCode(user, req, {
+    // A double-click within a minute keeps the code already on its way.
+    onCooldown: 'skip',
+    onHourlyLimit: 'throw',
+  });
+  return { verified: false, emailSent: status !== 'failed' };
 }
 
 const INVALID_LOGIN = () =>
   new AppError(401, 'INVALID_CREDENTIALS', 'Email or password is incorrect.');
 
-export async function login(input: LoginInput) {
+export async function login(input: LoginInput, req: Request) {
   const user = await prisma.user.findUnique({
     where: { email: input.email },
-    select: { id: true, passwordHash: true, status: true },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      passwordHash: true,
+      status: true,
+      emailVerifiedAt: true,
+    },
   });
   if (!user) {
     await burnPasswordCheck(input.password);
@@ -58,6 +142,15 @@ export async function login(input: LoginInput) {
   }
   const valid = await verifyPassword(input.password, user.passwordHash);
   if (!valid || user.status !== 'ACTIVE') throw INVALID_LOGIN();
+  if (!user.emailVerifiedAt) {
+    // Only after the right password, so this never reveals which emails are registered.
+    await sendVerificationCode(user, req, { onCooldown: 'skip', onHourlyLimit: 'skip' });
+    throw new AppError(
+      403,
+      'EMAIL_NOT_VERIFIED',
+      'Please verify your email first. We have sent a code to your inbox.',
+    );
+  }
 
   const refreshToken = await issueRefreshToken(prisma, user.id);
   return { userId: user.id, refreshToken };

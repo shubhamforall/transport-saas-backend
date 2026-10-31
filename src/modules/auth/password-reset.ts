@@ -122,6 +122,11 @@ export async function resetPassword(token: string, password: string, req: Reques
     });
     if (count !== 1) throw invalid();
     await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    // The link was opened from the inbox, which proves the email address.
+    await tx.user.updateMany({
+      where: { id: record.userId, emailVerifiedAt: null },
+      data: { emailVerifiedAt: new Date() },
+    });
     await tx.refreshToken.updateMany({
       where: { userId: record.userId, revokedAt: null },
       data: { revokedAt: new Date() },

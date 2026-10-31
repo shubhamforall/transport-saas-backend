@@ -3,9 +3,9 @@ import { createApp } from '../src/app.js';
 import { prisma } from '../src/services/prisma.js';
 import { testOutbox } from '../src/services/mailer.js';
 import {
-  PASSWORD,
   browserClient,
   ownerWithTenant,
+  registerVerified,
   resetDb,
   signedInUser,
   uniqueEmail,
@@ -23,15 +23,7 @@ const base = (tenantId: string) => `/api/v1/tenants/${tenantId}`;
 const tokenFromOutbox = () =>
   decodeURIComponent(/token=([^\s&]+)/.exec(testOutbox.at(-1)!.text)![1]!);
 
-async function registerWith(email: string) {
-  const c = await browserClient(app);
-  const r = await c.post('/api/v1/auth/register', {
-    name: 'Invited Person',
-    email,
-    password: PASSWORD,
-  });
-  return { ...c, userId: r.body.user.id as string };
-}
+const registerWith = (email: string) => registerVerified(app, email, 'Invited Person');
 
 describe('invitations', () => {
   it('owner invites by email; invitee accepts and gets the role', async () => {
@@ -99,6 +91,40 @@ describe('invitations', () => {
     const token2 = tokenFromOutbox();
     await o.post(`${base(o.tenantId)}/invitations/${again.body.id}/revoke`);
     expect((await invitee.post('/api/v1/invitations/accept', { token: token2 })).status).toBe(400);
+  });
+
+  it('signing up from a valid invitation skips the email code; other tokens do not', async () => {
+    const o = await ownerWithTenant(app, 'Invite Skip Co');
+    const email = uniqueEmail('invited.skip');
+    await o.post(`${base(o.tenantId)}/invitations`, { email, role: 'VIEWER' });
+    const token = tokenFromOutbox();
+
+    // A token for a different email does not verify this one.
+    const other = await browserClient(app);
+    const wrongEmail = await other.post('/api/v1/auth/register', {
+      name: 'Not Invited',
+      email: uniqueEmail('not.invited'),
+      password: 'Str0ng-Passw0rd!',
+      invitationToken: token,
+    });
+    expect(wrongEmail.status).toBe(202);
+
+    const c = await browserClient(app);
+    const reg = await c.post('/api/v1/auth/register', {
+      name: 'Invited Person',
+      email,
+      password: 'Str0ng-Passw0rd!',
+      invitationToken: token,
+    });
+    expect(reg.status).toBe(201);
+    expect(reg.body.user.email).toBe(email);
+    expect(testOutbox.some((m) => m.to === email && /verification code/.test(m.subject))).toBe(
+      false,
+    );
+    expect((await prisma.user.findUniqueOrThrow({ where: { email } })).emailVerifiedAt).not.toBe(
+      null,
+    );
+    expect((await c.post('/api/v1/invitations/accept', { token })).status).toBe(200);
   });
 
   it('cannot invite an existing member', async () => {

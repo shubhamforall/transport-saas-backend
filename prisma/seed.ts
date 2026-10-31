@@ -188,6 +188,7 @@ async function main() {
       email: 'admin@demo.vaharo.local',
       passwordHash,
       isPlatformAdmin: true,
+      emailVerifiedAt: new Date(),
     },
   });
 
@@ -195,7 +196,7 @@ async function main() {
     const user = await prisma.user.upsert({
       where: { email: owner.email },
       update: {},
-      create: { ...owner, passwordHash },
+      create: { ...owner, passwordHash, emailVerifiedAt: new Date() },
     });
     let membership = await prisma.membership.findFirst({
       where: { userId: user.id, role: 'OWNER', tenant: { name: tenant.name } },

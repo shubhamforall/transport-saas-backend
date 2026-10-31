@@ -1,6 +1,7 @@
 import request from 'supertest';
 import type { Express } from 'express';
 import { prisma } from '../src/services/prisma.js';
+import { testOutbox } from '../src/services/mailer.js';
 
 /** Child tables first. Fixed names only; never interpolate user input into SQL. */
 const TABLES = [
@@ -22,6 +23,7 @@ const TABLES = [
   'subscription_webhook_events',
   'plans',
   'password_reset_tokens',
+  'email_verification_codes',
   'audit_logs',
   'refresh_tokens',
   'memberships',
@@ -57,14 +59,40 @@ export function uniqueEmail(prefix = 'user') {
 
 export const PASSWORD = 'Str0ng-Passw0rd!';
 
-/** Registers a user and returns a signed-in client. */
-export async function signedInUser(app: Express, name = 'Test User') {
+/**
+ * Takes the newest verification code sent to `email` out of the test outbox, so tests that
+ * count emails only see their own.
+ */
+export function takeVerificationCode(email: string): string {
+  for (let i = testOutbox.length - 1; i >= 0; i--) {
+    const msg = testOutbox[i]!;
+    const match = /^(\d{6}) is your Vaharo verification code$/.exec(msg.subject);
+    if (msg.to === email && match) {
+      testOutbox.splice(i, 1);
+      return match[1]!;
+    }
+  }
+  throw new Error(`no verification code was sent to ${email}`);
+}
+
+/** Signs up with the email code, as a person would, and returns the signed-in client. */
+export async function registerVerified(app: Express, email: string, name = 'Test User') {
   const client = await browserClient(app);
-  const email = uniqueEmail();
-  const res = await client.post('/api/v1/auth/register', { name, email, password: PASSWORD });
-  if (res.status !== 201)
-    throw new Error(`register failed: ${res.status} ${JSON.stringify(res.body)}`);
+  const reg = await client.post('/api/v1/auth/register', { name, email, password: PASSWORD });
+  if (reg.status !== 202)
+    throw new Error(`register failed: ${reg.status} ${JSON.stringify(reg.body)}`);
+  const res = await client.post('/api/v1/auth/verify-email', {
+    email,
+    code: takeVerificationCode(email),
+  });
+  if (res.status !== 200)
+    throw new Error(`verify failed: ${res.status} ${JSON.stringify(res.body)}`);
   return { ...client, email, userId: res.body.user.id as string };
+}
+
+/** Registers a verified user and returns a signed-in client. */
+export async function signedInUser(app: Express, name = 'Test User') {
+  return registerVerified(app, uniqueEmail(), name);
 }
 
 /** Signed-in user who owns a new company. */
