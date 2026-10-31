@@ -7,6 +7,7 @@ import { loginSchema, registerSchema } from './auth.schemas.js';
 import { createSession, getMe, login, register } from './auth.service.js';
 import { REFRESH_COOKIE, clearAuthCookies, setAuthCookies, setCsrfCookie } from './cookies.js';
 import { revokeRefreshToken, rotateRefreshToken } from './tokens.js';
+import { promoteIfListed } from '../../services/platform-admins.js';
 import {
   forgotPasswordSchema,
   requestPasswordReset,
@@ -67,6 +68,7 @@ export function createAuthRouter({ rateLimitMax }: AuthRouterOptions) {
       });
       return;
     }
+    await promoteIfListed(result.userId, req);
     const session = await createSession(result.userId, result.refreshToken);
     setAuthCookies(res, session.accessToken, session.refreshToken);
     res.status(201).json(await getMe(result.userId));
@@ -75,6 +77,7 @@ export function createAuthRouter({ rateLimitMax }: AuthRouterOptions) {
   router.post('/verify-email', authLimiter, async (req, res) => {
     const { email, code } = verifyEmailSchema.parse(req.body);
     const { userId, refreshToken } = await verifyEmail(email, code, req);
+    await promoteIfListed(userId, req);
     const session = await createSession(userId, refreshToken);
     setAuthCookies(res, session.accessToken, session.refreshToken);
     res.json(await getMe(userId));
@@ -91,6 +94,7 @@ export function createAuthRouter({ rateLimitMax }: AuthRouterOptions) {
   router.post('/login', authLimiter, async (req, res) => {
     const input = loginSchema.parse(req.body);
     const { userId, refreshToken } = await login(input, req);
+    await promoteIfListed(userId, req);
     const session = await createSession(userId, refreshToken);
     setAuthCookies(res, session.accessToken, session.refreshToken);
     res.json(await getMe(userId));

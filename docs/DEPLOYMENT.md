@@ -70,11 +70,11 @@ curl https://api.<your-domain>/health    # {"status":"ok",...}
   columns before running it.
 - Never run `npm run db:seed` in production (it refuses anyway).
 
-Create the first Super Admin after signing up through the web app:
-
-```bash
-npm run platform:admin -- you@<your-domain>
-```
+**Super Admins** are listed in `src/config/platform-admins.ts` (currently
+`patilshubham0514@gmail.com`). A listed account is promoted automatically once its email is
+verified: on sign-up verification, on every sign-in, and at server start (so on every deploy).
+Nothing happens if the account does not exist yet. To add someone else ad hoc:
+`npm run platform:admin -- someone@<your-domain>`.
 
 Then sign in, open **Super Admin → Plans** and set real prices, limits and Razorpay plan ids.
 Companies only get a free trial once at least one active plan exists.
