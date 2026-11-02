@@ -14,6 +14,7 @@ import { tenantsRouter } from './modules/tenants/tenants.routes.js';
 import { plansRouter, razorpayWebhook } from './modules/subscriptions/subscriptions.routes.js';
 import { invitationsRouter } from './modules/team/team.routes.js';
 import { platformRouter } from './modules/platform/platform.routes.js';
+import { contactRouter } from './modules/contact/contact.routes.js';
 
 export interface AppOptions {
   /** Requests per 15 minutes per IP on auth endpoints. Defaults to AUTH_RATE_LIMIT_MAX. */
@@ -64,6 +65,7 @@ export function createApp(options: AppOptions = {}) {
   api.use('/plans', plansRouter);
   api.use('/invitations', invitationsRouter);
   api.use('/platform', platformRouter);
+  api.use('/contact', contactRouter);
   app.use('/api/v1', api);
 
   app.use(notFoundHandler);

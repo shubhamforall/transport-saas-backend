@@ -7,6 +7,8 @@ import { logger } from '../utils/logger.js';
 export interface MailMessage {
   to: string;
   cc?: string[];
+  /** Where replies go, e.g. the visitor who filled in the contact form. */
+  replyTo?: string;
   subject: string;
   text: string;
   html?: string;

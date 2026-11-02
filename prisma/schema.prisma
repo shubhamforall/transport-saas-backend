@@ -570,7 +570,7 @@ model EmailLog {
   id                String      @id @default(cuid()) @db.VarChar(30)
   tenantId          String?     @db.VarChar(30)
   invoiceId         String?     @db.VarChar(30)
-  /// invoice | invitation | password_reset | email_verification
+  /// invoice | invitation | password_reset | email_verification | contact
   kind              String      @db.VarChar(32)
   recipient         String      @db.VarChar(254)
   subject           String      @db.VarChar(300)
